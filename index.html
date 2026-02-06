@@ -194,7 +194,7 @@
     <div id="toast-container" class="fixed top-24 left-0 right-0 z-[70] pointer-events-none flex flex-col items-center gap-3 px-4"></div>
 
     <script>
-        const STORAGE_KEY = 'hunter_system_vftf_save_v8_login';
+        const STORAGE_KEY = 'hunter_system_vftf_save_v9_tuned';
 
         // --- Game State ---
         const gameState = {
@@ -402,7 +402,6 @@
                     this.playSound('levelup');
                     this.addLog('SYSTEM', 'REGISTRATION COMPLETE', `Welcome, Player ${name}.`);
                     
-                    // Show a brief "Awakening" animation toast before routing
                     const container = document.getElementById('app-container');
                     container.innerHTML = `
                         <div class="flex flex-col items-center justify-center h-full animate-pulse">
@@ -745,56 +744,147 @@
                 const lHip = landmarks[23], rHip = landmarks[24];
                 const lKnee = landmarks[25], rKnee = landmarks[26];
                 const lAnkle = landmarks[27], rAnkle = landmarks[28];
+                
+                // Helper to get average visibility of key points
+                const getVis = (indices) => indices.reduce((acc, i) => acc + landmarks[i].visibility, 0) / indices.length;
 
                 let angle = 0;
                 let counted = false;
+                let currentStage = this.training.stage; // 'up' or 'down'
 
                 if (mode === 'pushup') {
-                    angle = this.calculateAngle(lShoulder, lElbow, lWrist);
-                    if (angle > 160) { this.training.stage = "up"; feedback.innerText = "DESCEND"; feedback.style.color = "#38bdf8"; }
-                    if (angle < 90 && this.training.stage === 'up') { this.training.stage = "down"; counted = true; }
+                    if (getVis([11, 13, 15]) < 0.5 && getVis([12, 14, 16]) < 0.5) {
+                        feedback.innerText = "CAMERA ADJUST";
+                        return;
+                    }
+                    // Use the more visible arm
+                    const useLeft = getVis([11, 13, 15]) > getVis([12, 14, 16]);
+                    angle = useLeft ? this.calculateAngle(lShoulder, lElbow, lWrist) 
+                                    : this.calculateAngle(rShoulder, rElbow, rWrist);
+                    
+                    // State Machine: Start UP (Extended) -> Go DOWN (<90) -> Return UP (>160)
+                    if (angle > 160) {
+                        if (currentStage === 'down') {
+                            counted = true;
+                            this.training.stage = 'up';
+                        }
+                        feedback.innerText = "READY";
+                        feedback.style.color = "#fff";
+                    }
+                    if (angle < 85) { // Stricter bottom
+                        this.training.stage = 'down';
+                        feedback.innerText = "PUSH";
+                        feedback.style.color = "#38bdf8";
+                    }
                 } 
                 else if (mode === 'squat') {
+                    if (getVis([23, 25, 27]) < 0.5) return;
+                    
                     angle = this.calculateAngle(lHip, lKnee, lAnkle);
-                    if (angle > 170) { this.training.stage = "up"; feedback.innerText = "SQUAT DOWN"; feedback.style.color = "#38bdf8"; }
-                    if (angle < 90 && this.training.stage === 'up') { this.training.stage = "down"; counted = true; }
+                    
+                    if (angle > 165) {
+                        if (currentStage === 'down') {
+                            counted = true;
+                            this.training.stage = 'up';
+                        }
+                        feedback.innerText = "READY";
+                        feedback.style.color = "#fff";
+                    }
+                    if (angle < 100) { // Good depth
+                        this.training.stage = 'down';
+                        feedback.innerText = "RISE";
+                        feedback.style.color = "#38bdf8";
+                    }
                 }
                 else if (mode === 'pullup') {
-                    if (lWrist.y < lShoulder.y) {
-                        angle = this.calculateAngle(lShoulder, lElbow, lWrist);
-                        if (angle > 150) { this.training.stage = "hang"; feedback.innerText = "PULL UP"; feedback.style.color = "#38bdf8"; }
-                        if (angle < 70 && this.training.stage === 'hang') { this.training.stage = "up"; counted = true; }
-                    } else {
-                        feedback.innerText = "HANG ON BAR";
+                    if (getVis([11, 13, 15]) < 0.5) return;
+                    
+                    angle = this.calculateAngle(lShoulder, lElbow, lWrist);
+                    
+                    // Hang (Bottom) vs Pull (Top)
+                    // Arms straight (> 150) -> Arms bent (< 70) -> Straight
+                    if (angle > 150) {
+                        if (currentStage === 'up') { // Coming down from pull
+                            counted = true; // Count when returning to hang? Or count at top?
+                            // Standard is count at top usually, but fully completing rep implies return.
+                            // Let's count at top for gratification, but reset at bottom.
+                            // Actually, let's stick to consistent pattern: Start Rest -> Action -> Return -> Count.
+                            // Rest = Hang.
+                            this.training.stage = 'down'; // Hanging is 'down' for pullup? Or 'up' (arms up)?
+                            // Let's call extended arms 'extended'.
+                        }
+                        this.training.stage = 'extended';
+                        feedback.innerText = "PULL";
+                    }
+                    if (angle < 70) {
+                        if (this.training.stage === 'extended') {
+                             this.training.stage = 'contracted';
+                             // Count here? No, prevent cheat.
+                        }
+                        feedback.innerText = "LOWER";
+                    }
+                    // Wait, logic needs to be robust. 
+                    // Start: Extended (>150).
+                    // Action: Contract (<70).
+                    // Finish: Extended (>150) -> Count.
+                    if (angle > 150 && this.training.stage === 'contracted') {
+                        counted = true;
+                        this.training.stage = 'extended';
                     }
                 }
                 else if (mode === 'hspu') { 
-                    if (lWrist.y > lShoulder.y) {
-                        angle = this.calculateAngle(lShoulder, lElbow, lWrist);
-                        if (angle > 160) { this.training.stage = "up"; feedback.innerText = "DESCEND"; feedback.style.color = "#38bdf8"; }
-                        if (angle < 90 && this.training.stage === 'up') { this.training.stage = "down"; counted = true; }
-                    } else {
-                        feedback.innerText = "INVERT BODY";
+                    // Inverted. Extended arms (> 160) is TOP position (Start).
+                    // Bent arms (< 90) is BOTTOM position.
+                    angle = this.calculateAngle(lShoulder, lElbow, lWrist);
+                    
+                    if (angle > 160) {
+                        if (currentStage === 'down') {
+                            counted = true;
+                            this.training.stage = 'up';
+                        }
+                        feedback.innerText = "DESCEND";
+                    }
+                    if (angle < 85) {
+                        this.training.stage = 'down';
+                        feedback.innerText = "PUSH";
                     }
                 }
                 else if (mode === 'lunge') {
-                    const leftKneeAngle = this.calculateAngle(lHip, lKnee, lAnkle);
-                    const rightKneeAngle = this.calculateAngle(rHip, rKnee, rAnkle);
-                    if (leftKneeAngle > 160 && rightKneeAngle > 160) { this.training.stage = "up"; feedback.innerText = "LUNGE"; feedback.style.color = "#38bdf8"; }
-                    if ((leftKneeAngle < 90 || rightKneeAngle < 90) && this.training.stage === 'up') { this.training.stage = "down"; counted = true; }
+                    // Standing (> 160). Lunge (< 90).
+                    const lAngle = this.calculateAngle(lHip, lKnee, lAnkle);
+                    const rAngle = this.calculateAngle(rHip, rKnee, rAnkle);
+                    
+                    // If either leg is bent deep
+                    const isLunging = lAngle < 95 || rAngle < 95;
+                    const isStanding = lAngle > 160 && rAngle > 160;
+                    
+                    if (isStanding) {
+                        if (currentStage === 'down') {
+                            counted = true;
+                            this.training.stage = 'up';
+                        }
+                        feedback.innerText = "LUNGE";
+                    }
+                    if (isLunging) {
+                        this.training.stage = 'down';
+                        feedback.innerText = "UP";
+                    }
                 }
 
                 if (counted) {
                     this.training.count++;
                     this.training.lastTime = Date.now();
                     counter.innerText = this.training.count;
-                    feedback.innerText = "GOOD FORM";
+                    feedback.innerText = "REP COMPLETE";
                     feedback.style.color = "#10b981";
                     this.playSound('success');
+                    
+                    // Pulse Effect
                     const flash = document.createElement('div');
-                    flash.className = 'absolute inset-0 bg-system-accent/30 pointer-events-none z-50';
+                    flash.className = 'absolute inset-0 bg-system-success/20 pointer-events-none z-50 transition-opacity duration-300';
                     this.video.parentElement.appendChild(flash);
-                    setTimeout(() => flash.remove(), 150);
+                    setTimeout(() => flash.style.opacity = '0', 50);
+                    setTimeout(() => flash.remove(), 300);
                     
                     this.syncTrainingProgress(mode, 1);
                 }
