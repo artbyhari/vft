@@ -194,7 +194,7 @@
     <div id="toast-container" class="fixed top-24 left-0 right-0 z-[70] pointer-events-none flex flex-col items-center gap-3 px-4"></div>
 
     <script>
-        const STORAGE_KEY = 'hunter_system_vftf_save_v9_tuned';
+        const STORAGE_KEY = 'hunter_system_vftf_save_v10_fixed';
 
         // --- Game State ---
         const gameState = {
@@ -753,7 +753,7 @@
                 let currentStage = this.training.stage; // 'up' or 'down'
 
                 if (mode === 'pushup') {
-                    if (getVis([11, 13, 15]) < 0.5 && getVis([12, 14, 16]) < 0.5) {
+                    if (getVis([11, 13, 15]) < 0.4 && getVis([12, 14, 16]) < 0.4) {
                         feedback.innerText = "CAMERA ADJUST";
                         return;
                     }
@@ -762,16 +762,20 @@
                     angle = useLeft ? this.calculateAngle(lShoulder, lElbow, lWrist) 
                                     : this.calculateAngle(rShoulder, rElbow, rWrist);
                     
-                    // State Machine: Start UP (Extended) -> Go DOWN (<90) -> Return UP (>160)
+                    // Relaxed Thresholds: Top > 160, Bottom < 105 (was 85)
+                    // State Machine: Start UP (Extended) -> Go DOWN (<105) -> Return UP (>160)
                     if (angle > 160) {
                         if (currentStage === 'down') {
                             counted = true;
                             this.training.stage = 'up';
                         }
+                        // Only set 'up' if we are starting or returning
+                        if (currentStage === 'start') this.training.stage = 'up';
+                        
                         feedback.innerText = "READY";
                         feedback.style.color = "#fff";
                     }
-                    if (angle < 85) { // Stricter bottom
+                    if (angle < 105) { 
                         this.training.stage = 'down';
                         feedback.innerText = "PUSH";
                         feedback.style.color = "#38bdf8";
@@ -787,54 +791,41 @@
                             counted = true;
                             this.training.stage = 'up';
                         }
+                        if (currentStage === 'start') this.training.stage = 'up';
                         feedback.innerText = "READY";
                         feedback.style.color = "#fff";
                     }
-                    if (angle < 100) { // Good depth
+                    if (angle < 100) { 
                         this.training.stage = 'down';
                         feedback.innerText = "RISE";
                         feedback.style.color = "#38bdf8";
                     }
                 }
                 else if (mode === 'pullup') {
-                    if (getVis([11, 13, 15]) < 0.5) return;
+                    if (getVis([11, 13, 15]) < 0.4) return;
                     
                     angle = this.calculateAngle(lShoulder, lElbow, lWrist);
                     
-                    // Hang (Bottom) vs Pull (Top)
-                    // Arms straight (> 150) -> Arms bent (< 70) -> Straight
-                    if (angle > 150) {
-                        if (currentStage === 'up') { // Coming down from pull
-                            counted = true; // Count when returning to hang? Or count at top?
-                            // Standard is count at top usually, but fully completing rep implies return.
-                            // Let's count at top for gratification, but reset at bottom.
-                            // Actually, let's stick to consistent pattern: Start Rest -> Action -> Return -> Count.
-                            // Rest = Hang.
-                            this.training.stage = 'down'; // Hanging is 'down' for pullup? Or 'up' (arms up)?
-                            // Let's call extended arms 'extended'.
+                    // Relaxed: Hang > 140, Pull < 110 (Chin level)
+                    if (angle > 140) {
+                        if (currentStage === 'up') { 
+                            // Completing rep (returning to hang)
+                            // We can count here or at top. Counting at top feels better for pullups usually?
+                            // But logic is usually eccentric finish. Let's count at bottom return.
+                            counted = true; 
+                            this.training.stage = 'hang'; 
                         }
-                        this.training.stage = 'extended';
+                        if (currentStage === 'start') this.training.stage = 'hang';
                         feedback.innerText = "PULL";
                     }
-                    if (angle < 70) {
-                        if (this.training.stage === 'extended') {
-                             this.training.stage = 'contracted';
-                             // Count here? No, prevent cheat.
-                        }
+                    if (angle < 110) {
+                        this.training.stage = 'up';
                         feedback.innerText = "LOWER";
-                    }
-                    // Wait, logic needs to be robust. 
-                    // Start: Extended (>150).
-                    // Action: Contract (<70).
-                    // Finish: Extended (>150) -> Count.
-                    if (angle > 150 && this.training.stage === 'contracted') {
-                        counted = true;
-                        this.training.stage = 'extended';
                     }
                 }
                 else if (mode === 'hspu') { 
                     // Inverted. Extended arms (> 160) is TOP position (Start).
-                    // Bent arms (< 90) is BOTTOM position.
+                    // Bent arms (< 105) is BOTTOM position.
                     angle = this.calculateAngle(lShoulder, lElbow, lWrist);
                     
                     if (angle > 160) {
@@ -842,15 +833,16 @@
                             counted = true;
                             this.training.stage = 'up';
                         }
+                        if (currentStage === 'start') this.training.stage = 'up';
                         feedback.innerText = "DESCEND";
                     }
-                    if (angle < 85) {
+                    if (angle < 105) {
                         this.training.stage = 'down';
                         feedback.innerText = "PUSH";
                     }
                 }
                 else if (mode === 'lunge') {
-                    // Standing (> 160). Lunge (< 90).
+                    // Standing (> 160). Lunge (< 95).
                     const lAngle = this.calculateAngle(lHip, lKnee, lAnkle);
                     const rAngle = this.calculateAngle(rHip, rKnee, rAnkle);
                     
@@ -863,6 +855,7 @@
                             counted = true;
                             this.training.stage = 'up';
                         }
+                        if (currentStage === 'start') this.training.stage = 'up';
                         feedback.innerText = "LUNGE";
                     }
                     if (isLunging) {
@@ -875,7 +868,7 @@
                     this.training.count++;
                     this.training.lastTime = Date.now();
                     counter.innerText = this.training.count;
-                    feedback.innerText = "REP COMPLETE";
+                    feedback.innerText = "GOOD FORM";
                     feedback.style.color = "#10b981";
                     this.playSound('success');
                     
