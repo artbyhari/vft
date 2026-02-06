@@ -194,7 +194,8 @@
     <div id="toast-container" class="fixed top-24 left-0 right-0 z-[70] pointer-events-none flex flex-col items-center gap-3 px-4"></div>
 
     <script>
-        const STORAGE_KEY = 'hunter_system_vftf_save_v10_fixed';
+        const STORAGE_KEY = 'hunter_system_vftf_save_v12_connected';
+        const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyypnhF3JTWqbVdzGpw9Qmo-QkKfKWDbyenUKjVuVFnYEYaJs6vjVRPCuQGzh9StAjVdw/exec';
 
         // --- Game State ---
         const gameState = {
@@ -213,11 +214,11 @@
                 lastLogin: null
             },
             quests: [
-                { id: 'q_push', title: "Strength: Push-Ups", desc: "Standard Push-ups", type: "DAILY", goal: 100, current: 0, reward: 200, completed: false, stat: "str", mode: 'pushup' },
-                { id: 'q_squat', title: "Vitality: Squats", desc: "Standard Squats", type: "DAILY", goal: 100, current: 0, reward: 200, completed: false, stat: "vit", mode: 'squat' },
-                { id: 'q_pull', title: "Strength: Pull-Ups", desc: "Upper Body Strength", type: "DAILY", goal: 50, current: 0, reward: 300, completed: false, stat: "str", mode: 'pullup' },
-                { id: 'q_lunge', title: "Agility: Lunges", desc: "Lower Body Stability", type: "DAILY", goal: 50, current: 0, reward: 200, completed: false, stat: "agi", mode: 'lunge' },
-                { id: 'q_hspu', title: "Special: Handstand", desc: "Advanced Shoulder Press", type: "SPECIAL", goal: 20, current: 0, reward: 500, completed: false, stat: "str", mode: 'hspu' }
+                { id: 'q_push', title: "Push-Ups", desc: "Upper Body Strength", type: "DAILY", goal: 100, current: 0, reward: 200, completed: false, stats: ['str', 'vit'], mode: 'pushup' },
+                { id: 'q_squat', title: "Squats", desc: "Lower Body Power", type: "DAILY", goal: 100, current: 0, reward: 200, completed: false, stats: ['vit', 'luk'], mode: 'squat' },
+                { id: 'q_pull', title: "Pull-Ups", desc: "Back & Agility", type: "DAILY", goal: 50, current: 0, reward: 300, completed: false, stats: ['str', 'agi'], mode: 'pullup' },
+                { id: 'q_lunge', title: "Lunges", desc: "Balance & Stability", type: "DAILY", goal: 50, current: 0, reward: 200, completed: false, stats: ['agi', 'per'], mode: 'lunge' },
+                { id: 'q_hspu', title: "Handstand", desc: "Focus & Technique", type: "SPECIAL", goal: 20, current: 0, reward: 500, completed: false, stats: ['int', 'per'], mode: 'hspu' }
             ],
             logs: [],
             trainingMode: 'pushup',
@@ -240,6 +241,8 @@
                 } else {
                     this.checkDailyReset();
                     this.router(gameState.activePage === 'login' ? 'dashboard' : gameState.activePage);
+                    // Sync login stats
+                    this.syncDataToSheet('Session Login');
                 }
 
                 setInterval(() => this.checkCooldowns(), 1000);
@@ -282,6 +285,37 @@
                     localStorage.removeItem(STORAGE_KEY);
                     location.reload();
                 }
+            },
+
+            // --- Google Sheets Integration ---
+            syncDataToSheet(reason = 'Update') {
+                const p = gameState.player;
+                // Formatting data to fit within the 3 columns of the provided script while capturing progress
+                // Name Column: "Name [Level X - Rank Y]"
+                // Height Column: "Height" (Unchanged)
+                // Weight Column: "Weight" (Unchanged) - or could append stats here if needed, but keeping it clean for now.
+                
+                const payload = {
+                    name: `${p.name} [LV.${p.level} / ${p.rank}]`,
+                    height: p.height,
+                    weight: p.weight,
+                    // Additional data is sent in case user updates their script to accept it
+                    level: p.level,
+                    rank: p.rank,
+                    stats: p.stats,
+                    reason: reason
+                };
+
+                fetch(GOOGLE_SCRIPT_URL, {
+                    method: 'POST',
+                    mode: 'no-cors', // Important for simple GAS web apps without CORS config
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                }).then(() => {
+                    console.log("Synced to Cloud");
+                }).catch(e => console.error("Sync Error", e));
             },
 
             router(page) {
@@ -390,31 +424,46 @@
             handleLogin(e) {
                 e.preventDefault();
                 const name = document.getElementById('input-name').value;
-                const height = document.getElementById('input-height').value;
-                const weight = document.getElementById('input-weight').value;
+                const height = parseInt(document.getElementById('input-height').value);
+                const weight = parseInt(document.getElementById('input-weight').value);
 
-                if(name && height && weight) {
-                    gameState.player.name = name;
-                    gameState.player.height = height;
-                    gameState.player.weight = weight;
-                    gameState.setupComplete = true;
-                    
-                    this.playSound('levelup');
-                    this.addLog('SYSTEM', 'REGISTRATION COMPLETE', `Welcome, Player ${name}.`);
-                    
-                    const container = document.getElementById('app-container');
-                    container.innerHTML = `
-                        <div class="flex flex-col items-center justify-center h-full animate-pulse">
-                            <div class="text-4xl text-system-accent font-tech font-bold text-glow mb-4">WELCOME</div>
-                            <div class="text-sm text-white font-mono tracking-widest">INITIALIZING HUNTER INTERFACE...</div>
-                        </div>
-                    `;
-                    
-                    setTimeout(() => {
-                        this.saveState();
-                        this.router('dashboard');
-                    }, 2000);
+                // --- Validation Logic ---
+                if (!height || height < 50 || height > 300) {
+                    this.showToast("INVALID HEIGHT (50-300cm)", "danger");
+                    return;
                 }
+                if (!weight || weight < 20 || weight > 500) {
+                    this.showToast("INVALID WEIGHT (20-500kg)", "danger");
+                    return;
+                }
+                if (!name || name.length < 2) {
+                    this.showToast("NAME TOO SHORT", "danger");
+                    return;
+                }
+
+                gameState.player.name = name;
+                gameState.player.height = height;
+                gameState.player.weight = weight;
+                gameState.setupComplete = true;
+                
+                this.playSound('levelup');
+                this.addLog('SYSTEM', 'REGISTRATION COMPLETE', `Welcome, Player ${name}.`);
+                
+                // Sync to Google Sheets
+                this.syncDataToSheet('Registration');
+                
+                const container = document.getElementById('app-container');
+                container.innerHTML = `
+                    <div class="flex flex-col items-center justify-center h-full animate-pulse">
+                        <div class="text-4xl text-system-accent font-tech font-bold text-glow mb-4">WELCOME</div>
+                        <div class="text-sm text-white font-mono tracking-widest">INITIALIZING HUNTER INTERFACE...</div>
+                    </div>
+                `;
+                
+                setTimeout(() => {
+                    this.saveState();
+                    this.router('dashboard');
+                }, 2000);
             },
 
             renderDashboard(container) {
@@ -553,7 +602,7 @@
                                     <div>
                                         <div class="flex items-center gap-2 mb-2">
                                             <span class="bg-system-danger/10 text-system-danger border border-system-danger/30 text-[9px] font-bold px-2 py-0.5 rounded-sm uppercase tracking-wide font-tech">${q.type}</span>
-                                            <span class="text-[9px] font-tech text-system-dim uppercase font-bold tracking-wider">[${q.stat.toUpperCase()}]</span>
+                                            <span class="text-[9px] font-tech text-system-dim uppercase font-bold tracking-wider">[${q.stats.join('/').toUpperCase()}]</span>
                                         </div>
                                         <h3 class="font-bold text-base text-white group-hover:text-system-accent transition-colors font-tech tracking-wide">${q.title}</h3>
                                         <p class="text-[10px] text-gray-400 mt-0.5 font-medium">${q.desc}</p>
@@ -926,9 +975,14 @@
                     this.showToast(`QUEST CLEARED: ${q.title}`, "success");
                     this.addLog('QUEST', 'QUEST COMPLETE', `Finished: ${q.title}. Reward: +${q.reward} EXP`);
                     
-                    if(q.stat) {
-                        gameState.player.stats[q.stat] += 3;
-                        this.addLog('GROWTH', 'STAT INCREASE', `${q.stat.toUpperCase()} +3`);
+                    // Iterate through all stats assigned to this quest
+                    if(q.stats && Array.isArray(q.stats)) {
+                        q.stats.forEach(statKey => {
+                            if(gameState.player.stats[statKey] !== undefined) {
+                                gameState.player.stats[statKey] += 2; // +2 for balanced progression
+                            }
+                        });
+                        this.addLog('GROWTH', 'STAT INCREASE', `${q.stats.join(' & ').toUpperCase()} +2`);
                     }
 
                     this.gainExp(q.reward);
